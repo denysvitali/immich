@@ -3,6 +3,7 @@ import 'dart:ui';
 
 import 'package:flutter/services.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:immich_mobile/common/http.dart';
 import 'package:immich_mobile/domain/services/log.service.dart';
 import 'package:immich_mobile/entities/store.entity.dart';
 import 'package:immich_mobile/providers/db.provider.dart';
@@ -54,6 +55,10 @@ Cancelable<T?> runInIsolateGentle<T>({
 
         try {
           HttpSSLOptions.apply(applyNative: false);
+          
+          // Initialize HTTP client with proper mTLS configuration in isolate
+          await refreshClient();
+          
           result = await computation(ref);
         } on CanceledError {
           log.warning("Computation cancelled ${debugLabel == null ? '' : ' for $debugLabel'}");

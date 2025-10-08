@@ -45,10 +45,15 @@ class _DriftBackupPageState extends ConsumerState<DriftBackupPage> {
     }
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+
       await ref.read(driftBackupProvider.notifier).getBackupStatus(currentUser.id);
 
+      if (!mounted) return;
       ref.read(driftBackupProvider.notifier).updateSyncing(true);
       syncSuccess = await ref.read(backgroundSyncProvider).syncRemote();
+
+      if (!mounted) return;
       ref.read(driftBackupProvider.notifier).updateSyncing(false);
 
       if (mounted) {
@@ -82,9 +87,15 @@ class _DriftBackupPageState extends ConsumerState<DriftBackupPage> {
       }
 
       if (syncSuccess == null) {
-        ref.read(driftBackupProvider.notifier).updateSyncing(true);
+        // Check if widget is still mounted before using ref
+        if (mounted) {
+          ref.read(driftBackupProvider.notifier).updateSyncing(true);
+        }
         syncSuccess = await backupSyncManager.syncRemote();
-        ref.read(driftBackupProvider.notifier).updateSyncing(false);
+        // Check if widget is still mounted before using ref
+        if (mounted) {
+          ref.read(driftBackupProvider.notifier).updateSyncing(false);
+        }
       }
 
       await backupNotifier.getBackupStatus(currentUser.id);

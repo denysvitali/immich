@@ -57,6 +57,7 @@ void main() async {
     await initApp();
     await setPackageInfo();
     await refreshClient();
+
     // Warm-up isolate pool for worker manager
     await workerManager.init(dynamicSpawning: true);
     await migrateDatabaseIfNeeded(isar, drift);

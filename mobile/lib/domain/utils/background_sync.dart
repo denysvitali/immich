@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:immich_mobile/common/http.dart';
 import 'package:immich_mobile/domain/utils/sync_linked_album.dart';
 import 'package:immich_mobile/providers/infrastructure/sync.provider.dart';
 import 'package:immich_mobile/utils/isolate.dart';
@@ -153,7 +154,18 @@ class BackgroundSyncManager {
     onRemoteSyncStart?.call();
 
     _syncTask = runInIsolateGentle(
-      computation: (ref) => ref.read(syncStreamServiceProvider).sync(),
+      computation: (ref) async {
+        // Make sure the HTTP client is initialized on this thread
+        await refreshClient();
+        
+        // Add timeout handling for sync operations
+        return await ref.read(syncStreamServiceProvider).sync().timeout(
+          const Duration(minutes: 15), // 15 minute timeout for sync operations
+          onTimeout: () {
+            throw TimeoutException('Sync operation timed out after 15 minutes', const Duration(minutes: 15));
+          },
+        );
+      },
       debugLabel: 'remote-sync',
     );
     return _syncTask!

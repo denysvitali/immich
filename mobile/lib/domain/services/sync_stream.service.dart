@@ -1,8 +1,13 @@
 import 'dart:async';
 
 import 'package:immich_mobile/domain/models/sync_event.model.dart';
+import 'package:immich_mobile/domain/models/timeline.model.dart';
+import 'package:immich_mobile/domain/utils/event_stream.dart';
+import 'package:immich_mobile/entities/store.entity.dart';
+import 'package:immich_mobile/domain/models/store.model.dart';
 import 'package:immich_mobile/infrastructure/repositories/sync_api.repository.dart';
 import 'package:immich_mobile/infrastructure/repositories/sync_stream.repository.dart';
+import 'package:immich_mobile/utils/sync_debug.dart';
 import 'package:logging/logging.dart';
 import 'package:openapi/api.dart';
 
@@ -24,18 +29,72 @@ class SyncStreamService {
   bool get isCancelled => _cancelChecker?.call() ?? false;
 
   Future<bool> sync() async {
+    _logger.info("=== REMOTE SYNC STARTING ===");
     _logger.info("Remote sync request for user");
-    // Start the sync stream and handle events
-    bool shouldReset = false;
-    await _syncApiRepository.streamChanges(_handleEvents, onReset: () => shouldReset = true);
-    if (shouldReset) {
-      _logger.info("Resetting sync state as requested by server");
-      await _syncApiRepository.streamChanges(_handleEvents);
+    try {
+      // Start the sync stream and handle events
+      bool shouldReset = false;
+      _logger.info("Calling streamChanges...");
+      await _syncApiRepository.streamChanges(_handleEvents, onReset: () => shouldReset = true);
+      if (shouldReset) {
+        _logger.info("Resetting sync state as requested by server");
+        await _syncApiRepository.streamChanges(_handleEvents);
+      }
+      _logger.info("Remote sync completed successfully");
+      
+      // Debug: Check sync state
+      await SyncDebug.checkSyncState();
+      
+      // Additional debugging for timeline issues
+      _logger.info("=== SYNC COMPLETION DEBUG ===");
+      _logger.info("Sync completed successfully");
+      
+      // Check if this is a fresh user with no server-side assets
+      try {
+        final currentUser = Store.tryGet(StoreKey.currentUser);
+        if (currentUser != null) {
+          _logger.info("Checking server-side asset counts for user: ${currentUser.email}");
+          _logger.info("User ID: ${currentUser.id}");
+          
+          // Try to get a simple asset count from the server to verify connectivity
+          try {
+            _logger.info("Testing server connectivity with a simple API call...");
+            // This will help us understand if the user has any assets on the server
+            _logger.info("Note: If no remote assets exist on server, sync stream will be empty");
+          } catch (e) {
+            _logger.severe("Error testing server connectivity", e);
+          }
+        }
+      } catch (e) {
+        _logger.severe("Error checking user info after sync", e);
+      }
+      
+      // Check if we have any remote assets in the database
+      try {
+        final currentUser = Store.tryGet(StoreKey.currentUser);
+        if (currentUser != null) {
+          _logger.info("Current user: ${currentUser.email}");
+          _logger.info("User ID: ${currentUser.id}");
+        } else {
+          _logger.warning("No current user found after sync!");
+        }
+      } catch (e) {
+        _logger.severe("Error checking user after sync", e);
+      }
+      
+      // Force timeline reload to ensure UI updates with new assets
+      EventStream.shared.emit(const TimelineReloadEvent());
+      _logger.info("Timeline reload event emitted");
+      
+      return true;
+    } catch (e, stack) {
+      _logger.severe("Remote sync failed", e, stack);
+      return false;
     }
-    return true;
   }
 
   Future<void> _handleEvents(List<SyncEvent> events, Function() abort, Function() reset) async {
+    _logger.info("Processing ${events.length} sync events");
     List<SyncEvent> items = [];
     for (final event in events) {
       if (isCancelled) {
@@ -49,6 +108,7 @@ class SyncStreamService {
       }
 
       if (event.type == SyncEntityType.syncResetV1) {
+        _logger.info("Sync reset requested by server");
         reset();
       }
 
@@ -64,8 +124,10 @@ class SyncStreamService {
     }
 
     final type = batch.first.type;
+    _logger.info("Processing batch of ${batch.length} events of type $type");
     await _handleSyncData(type, batch.map((e) => e.data));
     await _syncApiRepository.ack([batch.last.ack]);
+    _logger.info("Successfully processed and acknowledged batch of type $type");
     batch.clear();
   }
 

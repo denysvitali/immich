@@ -138,6 +138,7 @@ class AppLifeCycleNotifier extends StateNotifier<AppLifeCycleEnum> {
   }
 
   Future<void> _handleBetaTimelineResume() async {
+    _log.info("=== APP LIFECYCLE: _handleBetaTimelineResume() called ===");
     _ref.read(backupProvider.notifier).cancelBackup();
     unawaited(_ref.read(backgroundWorkerLockServiceProvider).lock());
 
@@ -147,6 +148,7 @@ class AppLifeCycleNotifier extends StateNotifier<AppLifeCycleEnum> {
     final backgroundManager = _ref.read(backgroundSyncProvider);
     final isAlbumLinkedSyncEnable = _ref.read(appSettingsServiceProvider).getSetting(AppSettingsEnum.syncAlbums);
 
+    _log.info("=== APP LIFECYCLE: Starting sync operations ===");
     try {
       bool syncSuccess = false;
       await Future.wait([

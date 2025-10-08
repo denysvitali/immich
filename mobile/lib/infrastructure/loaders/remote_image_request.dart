@@ -2,11 +2,9 @@ part of 'image_request.dart';
 
 class RemoteImageRequest extends ImageRequest {
   static final log = Logger('RemoteImageRequest');
-  static final client = HttpClient()..maxConnectionsPerHost = 16;
   final RemoteCacheManager? cacheManager;
   final String uri;
   final Map<String, String> headers;
-  HttpClientRequest? _request;
 
   RemoteImageRequest({required this.uri, required this.headers, this.cacheManager});
 
@@ -41,8 +39,6 @@ class RemoteImageRequest extends ImageRequest {
       }
 
       rethrow;
-    } finally {
-      _request = null;
     }
   }
 
@@ -51,41 +47,43 @@ class RemoteImageRequest extends ImageRequest {
       return null;
     }
 
-    final request = _request = await client.getUrl(Uri.parse(url));
-    if (_isCancelled) {
-      request.abort();
-      return _request = null;
-    }
-
+    // Use immichHttpClient() which has the proper SSL/mTLS configuration
+    final httpClient = immichHttpClient();
+    final uri = Uri.parse(url);
+    
+    // Create headers map for the http client
+    final requestHeaders = <String, String>{};
     for (final entry in headers.entries) {
-      request.headers.set(entry.key, entry.value);
+      requestHeaders[entry.key] = entry.value;
     }
-    final response = await request.close();
+    
+    final response = await httpClient.get(uri, headers: requestHeaders);
     if (_isCancelled) {
       return null;
+    }
+    
+    if (response.statusCode != 200) {
+      throw Exception('Failed to load image: ${response.statusCode}');
     }
 
     final cacheManager = this.cacheManager;
     final streamController = StreamController<List<int>>(sync: true);
-    final Stream<List<int>> stream;
+    
+    // Convert response body to bytes
+    final bytes = response.bodyBytes;
+    
+    // Set up caching
     cacheManager?.putStreamedFile(url, streamController.stream);
-    stream = response.map((chunk) {
-      if (_isCancelled) {
-        throw StateError('Cancelled request');
-      }
-      if (cacheManager != null) {
-        streamController.add(chunk);
-      }
-      return chunk;
-    });
+    
+    // Add bytes to stream controller for caching
+    if (cacheManager != null) {
+      streamController.add(bytes);
+    }
+    streamController.close();
 
     try {
-      final Uint8List bytes = await _downloadBytes(stream, response.contentLength);
-      streamController.close();
       return await ImmutableBuffer.fromUint8List(bytes);
     } catch (e) {
-      streamController.addError(e);
-      streamController.close();
       if (_isCancelled) {
         return null;
       }
@@ -93,34 +91,6 @@ class RemoteImageRequest extends ImageRequest {
     }
   }
 
-  Future<Uint8List> _downloadBytes(Stream<List<int>> stream, int length) async {
-    final Uint8List bytes;
-    int offset = 0;
-    if (length > 0) {
-      // Known content length - use pre-allocated buffer
-      bytes = Uint8List(length);
-      await stream.listen((chunk) {
-        bytes.setAll(offset, chunk);
-        offset += chunk.length;
-      }, cancelOnError: true).asFuture();
-    } else {
-      // Unknown content length - collect chunks dynamically
-      final chunks = <List<int>>[];
-      int totalLength = 0;
-      await stream.listen((chunk) {
-        chunks.add(chunk);
-        totalLength += chunk.length;
-      }, cancelOnError: true).asFuture();
-
-      bytes = Uint8List(totalLength);
-      for (final chunk in chunks) {
-        bytes.setAll(offset, chunk);
-        offset += chunk.length;
-      }
-    }
-
-    return bytes;
-  }
 
   Future<ImageInfo?> _loadCachedFile(
     String url,
@@ -173,7 +143,7 @@ class RemoteImageRequest extends ImageRequest {
 
   @override
   void _onCancelled() {
-    _request?.abort();
-    _request = null;
+    // No need to abort request since we're using the http package's Client
+    // which doesn't support cancellation in the same way
   }
 }

@@ -6,6 +6,7 @@ import 'package:background_downloader/background_downloader.dart';
 import 'package:cancellation_token_http/http.dart';
 import 'package:flutter/material.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:immich_mobile/common/http.dart';
 import 'package:immich_mobile/constants/constants.dart';
 import 'package:immich_mobile/domain/services/log.service.dart';
 import 'package:immich_mobile/entities/store.entity.dart';
@@ -90,6 +91,9 @@ class BackgroundWorkerBgService extends BackgroundWorkerFlutterApi {
   Future<void> init() async {
     try {
       HttpSSLOptions.apply(applyNative: false);
+      
+      // Initialize HTTP client with proper mTLS configuration in background worker
+      await refreshClient();
 
       await Future.wait(
         [

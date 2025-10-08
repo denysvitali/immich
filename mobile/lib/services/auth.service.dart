@@ -63,7 +63,7 @@ class AuthService {
   }
 
   Future<bool> validateAuxilaryServerUrl(String url) async {
-    final httpclient = await immichHttpClient();
+    final httpclient = immichHttpClient();
     bool isValid = false;
 
     try {

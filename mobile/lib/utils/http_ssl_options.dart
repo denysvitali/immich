@@ -45,9 +45,9 @@ class HttpSSLOptions {
   }
 
   static void _apply(bool allowSelfSignedSSLCert, {bool applyNative = true}) {
-    String? serverHost;
     if (allowSelfSignedSSLCert && Store.tryGet(StoreKey.currentUser) != null) {
-      serverHost = Uri.parse(Store.tryGet(StoreKey.serverEndpoint) ?? "").host;
+      // serverHost is available for future use
+      final _ = Uri.parse(Store.tryGet(StoreKey.serverEndpoint) ?? "").host;
     }
 
     // HttpOverrides.global = HttpSSLCertOverride(allowSelfSignedSSLCert, serverHost, clientCert);
@@ -63,9 +63,9 @@ class HttpSSLOptions {
   }
 
   static void _applyWithUserCertificates(bool allowSelfSignedSSLCert, {bool applyNative = true}) {
-    String? serverHost;
     if (Store.tryGet(StoreKey.currentUser) != null) {
-      serverHost = Uri.parse(Store.tryGet(StoreKey.serverEndpoint) ?? "").host;
+      // serverHost is available for future use
+      final _ = Uri.parse(Store.tryGet(StoreKey.serverEndpoint) ?? "").host;
     }
 
     // Create SSL override that uses user certificates from system store

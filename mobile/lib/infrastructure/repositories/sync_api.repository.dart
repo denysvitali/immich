@@ -38,32 +38,40 @@ class SyncApiRepository {
     final shouldReset = Store.get(StoreKey.shouldResetSync, false);
     final request = http.Request('POST', Uri.parse(endpoint));
     request.headers.addAll(headers);
-    request.body = jsonEncode(
-      SyncStreamDto(
-        types: [
-          SyncRequestType.authUsersV1,
-          SyncRequestType.usersV1,
-          SyncRequestType.assetsV1,
-          SyncRequestType.assetExifsV1,
-          SyncRequestType.partnersV1,
-          SyncRequestType.partnerAssetsV1,
-          SyncRequestType.partnerAssetExifsV1,
-          SyncRequestType.albumsV1,
-          SyncRequestType.albumUsersV1,
-          SyncRequestType.albumAssetsV1,
-          SyncRequestType.albumAssetExifsV1,
-          SyncRequestType.albumToAssetsV1,
-          SyncRequestType.memoriesV1,
-          SyncRequestType.memoryToAssetsV1,
-          SyncRequestType.stacksV1,
-          SyncRequestType.partnerStacksV1,
-          SyncRequestType.userMetadataV1,
-          SyncRequestType.peopleV1,
-          SyncRequestType.assetFacesV1,
-        ],
-        reset: shouldReset,
-      ).toJson(),
+
+    final syncRequest = SyncStreamDto(
+      types: [
+        SyncRequestType.authUsersV1,
+        SyncRequestType.usersV1,
+        SyncRequestType.assetsV1,
+        SyncRequestType.assetExifsV1,
+        SyncRequestType.partnersV1,
+        SyncRequestType.partnerAssetsV1,
+        SyncRequestType.partnerAssetExifsV1,
+        SyncRequestType.albumsV1,
+        SyncRequestType.albumUsersV1,
+        SyncRequestType.albumAssetsV1,
+        SyncRequestType.albumAssetExifsV1,
+        SyncRequestType.albumToAssetsV1,
+        SyncRequestType.memoriesV1,
+        SyncRequestType.memoryToAssetsV1,
+        SyncRequestType.stacksV1,
+        SyncRequestType.partnerStacksV1,
+        SyncRequestType.userMetadataV1,
+        SyncRequestType.peopleV1,
+        SyncRequestType.assetFacesV1,
+      ],
+      reset: shouldReset,
     );
+
+    request.body = jsonEncode(syncRequest.toJson());
+
+    _logger.info("Sync request details:");
+    _logger.info("  Endpoint: $endpoint");
+    _logger.info("  Headers: $headers");
+    _logger.info("  Reset: $shouldReset");
+    _logger.info("  Request types: ${syncRequest.types.length} types");
+    _logger.info("  Request body size: ${request.body.length} bytes");
 
     String previousChunk = '';
     List<String> lines = [];
@@ -78,7 +86,19 @@ class SyncApiRepository {
     final reset = onReset ?? () {};
 
     try {
-      final response = await httpClient.send(request);
+      _logger.info("Sending sync stream request to: $endpoint");
+      final response = await httpClient
+          .send(request)
+          .timeout(
+            const Duration(minutes: 5), // 5 minute timeout for the initial request
+            onTimeout: () {
+              throw TimeoutException('Sync stream request timed out after 5 minutes', const Duration(minutes: 5));
+            },
+          );
+      _logger.info("Sync stream request completed with status: ${response.statusCode}");
+      _logger.info("Response headers: ${response.headers}");
+      _logger.info("Content-Type: ${response.headers['content-type']}");
+      _logger.info("Content-Length: ${response.headers['content-length']}");
 
       if (response.statusCode != 200) {
         final errorBody = await response.stream.bytesToString();
@@ -87,9 +107,21 @@ class SyncApiRepository {
 
       // Reset after successful stream start
       await Store.put(StoreKey.shouldResetSync, false);
+      _logger.info("Starting to process sync stream data...");
 
-      await for (final chunk in response.stream.transform(utf8.decoder)) {
+      // Add timeout to prevent hanging indefinitely
+      await for (final chunk
+          in response.stream
+              .transform(utf8.decoder)
+              .timeout(
+                const Duration(minutes: 2), // 2 minute timeout for stream processing
+                onTimeout: (sink) {
+                  _logger.warning("Sync stream processing timed out after 2 minutes");
+                  sink.close();
+                },
+              )) {
         if (shouldAbort) {
+          _logger.info("Sync stream aborted by client");
           break;
         }
 
@@ -109,7 +141,10 @@ class SyncApiRepository {
       if (lines.isNotEmpty && !shouldAbort) {
         await onData(_parseLines(lines), abort, reset);
       }
+
+      _logger.info("Sync stream processing completed");
     } catch (error, stack) {
+      _logger.severe("Sync stream error: $error", error, stack);
       return Future.error(error, stack);
     }
     stopwatch.stop();

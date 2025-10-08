@@ -1,9 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:collection/collection.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
+import 'package:http/http.dart';
+import 'package:immich_mobile/common/http.dart';
 import 'package:immich_mobile/domain/models/store.model.dart';
+import 'package:immich_mobile/services/http_client_config.service.dart';
 import 'package:immich_mobile/entities/asset.entity.dart';
 import 'package:immich_mobile/entities/store.entity.dart';
 import 'package:immich_mobile/models/server_info/server_version.model.dart';
@@ -16,9 +21,11 @@ import 'package:immich_mobile/services/api.service.dart';
 import 'package:immich_mobile/services/sync.service.dart';
 import 'package:immich_mobile/utils/debounce.dart';
 import 'package:logging/logging.dart';
+import 'package:ok_http/ok_http.dart';
 import 'package:openapi/api.dart';
 import 'package:socket_io_client/socket_io_client.dart';
 import 'package:immich_mobile/utils/debug_print.dart';
+import 'package:web_socket/web_socket.dart' as ws;
 
 enum PendingAction { assetDelete, assetUploaded, assetHidden, assetTrash }
 
@@ -72,6 +79,263 @@ class WebsocketState {
   int get hashCode => socket.hashCode ^ isConnected.hashCode;
 }
 
+/// WebSocket adapter that converts OkHttpWebSocket to standard Dart WebSocket
+class OkHttpWebSocketAdapter implements WebSocket {
+  final ws.WebSocket _okHttpWebSocket;
+  final StreamController<dynamic> _controller = StreamController<dynamic>.broadcast();
+  bool _isClosed = false;
+
+  OkHttpWebSocketAdapter(this._okHttpWebSocket) {
+    // Listen to OkHttpWebSocket events and convert them to standard WebSocket format
+    _okHttpWebSocket.events.listen(
+      (event) {
+        switch (event) {
+          case ws.TextDataReceived(text: final text):
+            _controller.add(text);
+          case ws.BinaryDataReceived(data: final data):
+            _controller.add(data);
+          case ws.CloseReceived():
+            _isClosed = true;
+            _controller.close();
+        }
+      },
+      onError: (error) {
+        _controller.addError(error);
+      },
+      onDone: () {
+        _isClosed = true;
+        _controller.close();
+      },
+    );
+  }
+
+  @override
+  Stream<dynamic> get stream => _controller.stream;
+
+  @override
+  bool get isBroadcast => stream.isBroadcast;
+
+  @override
+  void add(dynamic data) {
+    if (!_isClosed) {
+      if (data is String) {
+        _okHttpWebSocket.sendText(data);
+      } else if (data is List<int>) {
+        _okHttpWebSocket.sendBytes(Uint8List.fromList(data));
+      } else {
+        _okHttpWebSocket.sendText(data.toString());
+      }
+    }
+  }
+
+  @override
+  void addUtf8Text(List<int> bytes) {
+    if (!_isClosed) {
+      _okHttpWebSocket.sendBytes(Uint8List.fromList(bytes));
+    }
+  }
+
+  @override
+  Future<void> close([int? code, String? reason]) async {
+    if (!_isClosed) {
+      _isClosed = true;
+      await _okHttpWebSocket.close(code, reason);
+      _controller.close();
+    }
+  }
+
+  @override
+  int? get closeCode => null; // OkHttpWebSocket doesn't expose this directly
+
+  @override
+  String? get closeReason => null; // OkHttpWebSocket doesn't expose this directly
+
+  @override
+  String get extensions => '';
+
+  @override
+  String get protocol => _okHttpWebSocket.protocol;
+
+  @override
+  int get readyState => _isClosed ? 3 : 1; // 1 = OPEN, 3 = CLOSED
+
+  @override
+  String get url => ''; // OkHttpWebSocket doesn't expose this directly
+
+  // Implement all required WebSocket methods
+  @override
+  Future<void> addStream(Stream stream) async {
+    await for (final data in stream) {
+      add(data);
+    }
+  }
+
+  @override
+  Future<void> get done => _controller.done;
+
+  @override
+  Duration? get pingInterval => null;
+
+  @override
+  set pingInterval(Duration? interval) {
+    // OkHttpWebSocket doesn't support ping interval setting
+  }
+
+  // Implement all required Stream methods
+  @override
+  Future<bool> any(bool Function(dynamic element) test) => stream.any(test);
+
+  @override
+  Stream<dynamic> asBroadcastStream({void Function(StreamSubscription<dynamic> subscription)? onListen, void Function(StreamSubscription<dynamic> subscription)? onCancel}) => stream.asBroadcastStream(onListen: onListen, onCancel: onCancel);
+
+  @override
+  Stream<S> asyncExpand<S>(Stream<S>? Function(dynamic event) convert) => stream.asyncExpand(convert);
+
+  @override
+  Stream<S> asyncMap<S>(FutureOr<S> Function(dynamic event) convert) => stream.asyncMap(convert);
+
+  @override
+  Stream<R> cast<R>() => stream.cast<R>();
+
+  @override
+  Future<bool> contains(Object? needle) => stream.contains(needle);
+
+  @override
+  Stream<dynamic> distinct([bool Function(dynamic previous, dynamic next)? equals]) => stream.distinct(equals);
+
+  @override
+  Future<E> drain<E>([E? futureValue]) => stream.drain(futureValue);
+
+  @override
+  Future<dynamic> elementAt(int index) => stream.elementAt(index);
+
+  @override
+  Future<bool> every(bool Function(dynamic element) test) => stream.every(test);
+
+  @override
+  Future<dynamic> firstWhere(bool Function(dynamic element) test, {dynamic Function()? orElse}) => stream.firstWhere(test, orElse: orElse);
+
+  @override
+  Future<S> fold<S>(S initialValue, S Function(S previous, dynamic element) combine) => stream.fold(initialValue, combine);
+
+  @override
+  Future<void> forEach(void Function(dynamic element) action) => stream.forEach(action);
+
+  @override
+  Future<dynamic> get first => stream.first;
+
+  @override
+  Future<bool> get isEmpty => stream.isEmpty;
+
+  @override
+  Future<dynamic> get last => stream.last;
+
+  @override
+  Future<int> get length => stream.length;
+
+  @override
+  StreamSubscription<dynamic> listen(void Function(dynamic event)? onData, {Function? onError, void Function()? onDone, bool? cancelOnError}) => stream.listen(onData, onError: onError, onDone: onDone, cancelOnError: cancelOnError);
+
+  @override
+  Stream<S> map<S>(S Function(dynamic event) convert) => stream.map(convert);
+
+  @override
+  Future<dynamic> pipe(StreamConsumer<dynamic> streamConsumer) => stream.pipe(streamConsumer);
+
+  @override
+  Future<dynamic> reduce(dynamic Function(dynamic previous, dynamic element) combine) => stream.reduce(combine);
+
+  @override
+  Future<dynamic> get single => stream.single;
+
+  @override
+  Future<dynamic> singleWhere(bool Function(dynamic element) test, {dynamic Function()? orElse}) => stream.singleWhere(test, orElse: orElse);
+
+  @override
+  Stream<dynamic> skip(int count) => stream.skip(count);
+
+  @override
+  Stream<dynamic> skipWhile(bool Function(dynamic element) test) => stream.skipWhile(test);
+
+  @override
+  Stream<dynamic> take(int count) => stream.take(count);
+
+  @override
+  Stream<dynamic> takeWhile(bool Function(dynamic element) test) => stream.takeWhile(test);
+
+  @override
+  Stream<dynamic> timeout(Duration timeLimit, {void Function(EventSink<dynamic> sink)? onTimeout}) => stream.timeout(timeLimit, onTimeout: onTimeout);
+
+  @override
+  Future<List<dynamic>> toList() => stream.toList();
+
+  @override
+  Future<Set<dynamic>> toSet() => stream.toSet();
+
+  @override
+  Stream<S> transform<S>(StreamTransformer<dynamic, S> streamTransformer) => stream.transform(streamTransformer);
+
+  @override
+  Stream<dynamic> where(bool Function(dynamic event) test) => stream.where(test);
+
+  // Add missing Stream methods
+  @override
+  Stream<S> expand<S>(Iterable<S> Function(dynamic element) convert) => stream.expand(convert);
+
+  @override
+  Stream<dynamic> handleError(Function onError, {bool Function(dynamic error)? test}) => stream.handleError(onError, test: test);
+
+  @override
+  Future<String> join([String separator = ""]) => stream.join(separator);
+
+  @override
+  Future<dynamic> lastWhere(bool Function(dynamic element) test, {dynamic Function()? orElse}) => stream.lastWhere(test, orElse: orElse);
+
+  // Implement EventSink methods
+  @override
+  void addError(Object error, [StackTrace? stackTrace]) {
+    _controller.addError(error, stackTrace);
+  }
+}
+
+class ImmichHttpClientAdapter implements HttpClientAdapter {
+  Client httpClient = immichHttpClient();
+  final _log = Logger('ImmichHttpClientAdapter');
+
+  @override
+  Future<dynamic> connect(String uri, {Map<String, dynamic>? headers}) async {
+    if (Platform.isAndroid) {
+      // For Android, we need to create a new OkHttpClient with the same configuration
+      // as the one used in the HTTP client config service
+      final configService = HttpClientConfigService();
+      final configuredClient = await configService.getConfiguredClient();
+
+      // Extract the OkHttpClient from the configured client
+      if (configuredClient is OkHttpClient) {
+        try {
+          // Create OkHttpWebSocket with mTLS configuration
+          final okHttpWebSocket = await OkHttpWebSocket.connect(Uri.parse(uri), client: configuredClient);
+          _log.info('Created OkHttpWebSocket with mTLS configuration');
+          // Wrap OkHttpWebSocket to make it compatible with socket.io client
+          return OkHttpWebSocketAdapter(okHttpWebSocket);
+        } catch (e) {
+          _log.warning('Failed to create OkHttpWebSocket: $e, falling back to standard WebSocket');
+          return WebSocket.connect(uri);
+        }
+      } else {
+        // Fallback to standard WebSocket if not OkHttpClient
+        _log.warning('Expected OkHttpClient but got ${configuredClient.runtimeType}, falling back to standard WebSocket. mTLS may not work properly.');
+        return WebSocket.connect(uri);
+      }
+    } else {
+      // For iOS and other platforms, use the standard WebSocket
+      // The HTTP client configuration (including mTLS) is handled by the socket.io library
+      // through the HttpClientAdapter interface
+      return WebSocket.connect(uri);
+    }
+  }
+}
+
 class WebsocketNotifier extends StateNotifier<WebsocketState> {
   WebsocketNotifier(this._ref) : super(const WebsocketState(socket: null, isConnected: false, pendingChanges: []));
 
@@ -111,6 +375,7 @@ class WebsocketNotifier extends StateNotifier<WebsocketState> {
           OptionBuilder()
               .setPath("${endpoint.path}/socket.io")
               .setTransports(['websocket'])
+              .setHttpClientAdapter(ImmichHttpClientAdapter())
               .enableReconnection()
               .enableForceNew()
               .enableForceNewConnection()
