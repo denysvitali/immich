@@ -15,6 +15,8 @@ class SyncApiRepository {
   final Logger _logger = Logger('SyncApiRepository');
   final ApiService _api;
   final http.Client httpClient;
+
+  // Use OkHttp client with mTLS - the server returns empty sync streams when there's no data
   SyncApiRepository(this._api, {http.Client? httpClient}) : httpClient = httpClient ?? immichHttpClient();
 
   Future<void> ack(List<String> data) {
@@ -35,7 +37,17 @@ class SyncApiRepository {
     await _api.applyToParams([], headerParams);
     headers.addAll(headerParams);
 
-    final shouldReset = Store.get(StoreKey.shouldResetSync, false);
+    var shouldReset = Store.get(StoreKey.shouldResetSync, false);
+
+    // TEMPORARY FIX: Force reset once to clear stale checkpoints after mTLS changes
+    // This can be removed after all clients have synced once
+    final hasResetAfterMTLS = Store.get(StoreKey.hasResetAfterMTLS, false);
+    if (!hasResetAfterMTLS) {
+      _logger.warning("Forcing sync reset to clear stale checkpoints after mTLS changes");
+      shouldReset = true;
+      await Store.put(StoreKey.hasResetAfterMTLS, true);
+    }
+
     final request = http.Request('POST', Uri.parse(endpoint));
     request.headers.addAll(headers);
 
@@ -110,16 +122,21 @@ class SyncApiRepository {
       _logger.info("Starting to process sync stream data...");
 
       // Add timeout to prevent hanging indefinitely
+      int chunkCount = 0;
+      bool streamEnded = false;
       await for (final chunk
           in response.stream
               .transform(utf8.decoder)
               .timeout(
                 const Duration(minutes: 2), // 2 minute timeout for stream processing
                 onTimeout: (sink) {
-                  _logger.warning("Sync stream processing timed out after 2 minutes");
+                  _logger.warning("Sync stream processing timed out after 2 minutes, received $chunkCount chunks");
                   sink.close();
                 },
               )) {
+        chunkCount++;
+        _logger.info("Received chunk #$chunkCount with ${chunk.length} bytes: ${chunk.substring(0, chunk.length > 200 ? 200 : chunk.length)}");
+
         if (shouldAbort) {
           _logger.info("Sync stream aborted by client");
           break;
@@ -130,6 +147,8 @@ class SyncApiRepository {
         previousChunk = parts.removeLast();
         lines.addAll(parts);
 
+        _logger.info("Current lines buffer size: ${lines.length}, batch size: $batchSize");
+
         if (lines.length < batchSize) {
           continue;
         }
@@ -137,12 +156,17 @@ class SyncApiRepository {
         await onData(_parseLines(lines), abort, reset);
         lines.clear();
       }
+      streamEnded = true;
+      _logger.info("Stream loop ended. Total chunks received: $chunkCount");
 
       if (lines.isNotEmpty && !shouldAbort) {
+        _logger.info("Processing remaining ${lines.length} lines");
         await onData(_parseLines(lines), abort, reset);
+      } else {
+        _logger.warning("No remaining lines to process. Stream ended with $chunkCount chunks");
       }
 
-      _logger.info("Sync stream processing completed");
+      _logger.info("Sync stream processing completed (streamEnded: $streamEnded, chunks: $chunkCount)");
     } catch (error, stack) {
       _logger.severe("Sync stream error: $error", error, stack);
       return Future.error(error, stack);
@@ -159,6 +183,12 @@ class SyncApiRepository {
       final type = SyncEntityType.fromJson(jsonData['type'])!;
       final dataJson = jsonData['data'];
       final ack = jsonData['ack'];
+
+      // Log People and Face related data
+      if (type == SyncEntityType.personV1 || type == SyncEntityType.assetFaceV1) {
+        _logger.info("Received sync data for $type");
+      }
+
       final converter = _kResponseMap[type];
       if (converter == null) {
         _logger.warning("Unknown type $type");
@@ -168,6 +198,7 @@ class SyncApiRepository {
       data.add(SyncEvent(type: type, data: converter(dataJson), ack: ack));
     }
 
+    _logger.info("Parsed ${data.length} sync events from ${lines.length} lines");
     return data;
   }
 }

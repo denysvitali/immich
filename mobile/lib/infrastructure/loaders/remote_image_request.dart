@@ -47,46 +47,54 @@ class RemoteImageRequest extends ImageRequest {
       return null;
     }
 
-    // Use immichHttpClient() which has the proper SSL/mTLS configuration
-    final httpClient = immichHttpClient();
-    final uri = Uri.parse(url);
-    
-    // Create headers map for the http client
-    final requestHeaders = <String, String>{};
-    for (final entry in headers.entries) {
-      requestHeaders[entry.key] = entry.value;
-    }
-    
-    final response = await httpClient.get(uri, headers: requestHeaders);
-    if (_isCancelled) {
-      return null;
-    }
-    
-    if (response.statusCode != 200) {
-      throw Exception('Failed to load image: ${response.statusCode}');
-    }
-
-    final cacheManager = this.cacheManager;
-    final streamController = StreamController<List<int>>(sync: true);
-    
-    // Convert response body to bytes
-    final bytes = response.bodyBytes;
-    
-    // Set up caching
-    cacheManager?.putStreamedFile(url, streamController.stream);
-    
-    // Add bytes to stream controller for caching
-    if (cacheManager != null) {
-      streamController.add(bytes);
-    }
-    streamController.close();
-
     try {
-      return await ImmutableBuffer.fromUint8List(bytes);
-    } catch (e) {
+      // Use immichHttpClient() which has the proper SSL/mTLS configuration
+      final httpClient = immichHttpClient();
+      final uri = Uri.parse(url);
+
+      // Create headers map for the http client
+      final requestHeaders = <String, String>{};
+      for (final entry in headers.entries) {
+        requestHeaders[entry.key] = entry.value;
+      }
+
+      log.fine('Downloading image from: $url');
+      final response = await httpClient.get(uri, headers: requestHeaders);
       if (_isCancelled) {
         return null;
       }
+
+      if (response.statusCode != 200) {
+        log.warning('Failed to load image from $url: HTTP ${response.statusCode}');
+        throw Exception('Failed to load image: ${response.statusCode}');
+      }
+
+      log.fine('Successfully downloaded image from: $url (${response.bodyBytes.length} bytes)');
+
+      final cacheManager = this.cacheManager;
+      final streamController = StreamController<List<int>>(sync: true);
+
+      // Convert response body to bytes
+      final bytes = response.bodyBytes;
+
+      // Set up caching
+      cacheManager?.putStreamedFile(url, streamController.stream);
+
+      // Add bytes to stream controller for caching
+      if (cacheManager != null) {
+        streamController.add(bytes);
+      }
+      streamController.close();
+
+      return await ImmutableBuffer.fromUint8List(bytes);
+    } on StateError catch (e, stack) {
+      log.severe('HTTP client not initialized when trying to load image from $url', e, stack);
+      rethrow;
+    } catch (e, stack) {
+      if (_isCancelled) {
+        return null;
+      }
+      log.severe('Error downloading image from $url', e, stack);
       rethrow;
     }
   }

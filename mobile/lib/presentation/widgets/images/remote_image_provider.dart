@@ -58,6 +58,50 @@ class RemoteThumbProvider extends CancellableImageProvider<RemoteThumbProvider>
   int get hashCode => assetId.hashCode;
 }
 
+class RemoteUrlImageProvider extends CancellableImageProvider<RemoteUrlImageProvider>
+    with CancellableImageProviderMixin<RemoteUrlImageProvider> {
+  static final cacheManager = RemoteThumbnailCacheManager();
+  final String url;
+  final Map<String, String>? headers;
+
+  RemoteUrlImageProvider({required this.url, this.headers});
+
+  @override
+  Future<RemoteUrlImageProvider> obtainKey(ImageConfiguration configuration) {
+    return SynchronousFuture(this);
+  }
+
+  @override
+  ImageStreamCompleter loadImage(RemoteUrlImageProvider key, ImageDecoderCallback decode) {
+    return OneFramePlaceholderImageStreamCompleter(
+      _codec(key, decode),
+      informationCollector: () => <DiagnosticsNode>[
+        DiagnosticsProperty<ImageProvider>('Image provider', this),
+        DiagnosticsProperty<String>('URL', key.url),
+      ],
+      onDispose: cancel,
+    );
+  }
+
+  Stream<ImageInfo> _codec(RemoteUrlImageProvider key, ImageDecoderCallback decode) {
+    final request = this.request = RemoteImageRequest(
+      uri: key.url,
+      headers: headers ?? ApiService.getRequestHeaders(),
+      cacheManager: cacheManager,
+    );
+    return loadRequest(request, decode);
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is RemoteUrlImageProvider && other.url == url;
+  }
+
+  @override
+  int get hashCode => url.hashCode;
+}
+
 class RemoteFullImageProvider extends CancellableImageProvider<RemoteFullImageProvider>
     with CancellableImageProviderMixin<RemoteFullImageProvider> {
   static final cacheManager = RemoteThumbnailCacheManager();

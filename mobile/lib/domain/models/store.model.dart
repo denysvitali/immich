@@ -83,7 +83,8 @@ enum StoreKey<T> {
   shouldResetSync<bool>._(1007),
 
   // mTLS
-  mTlsSelectedPrivateKey<String>._(1008);
+  mTlsSelectedPrivateKey<String>._(1008),
+  hasResetAfterMTLS<bool>._(1009);
 
   const StoreKey._(this.id);
   final int id;

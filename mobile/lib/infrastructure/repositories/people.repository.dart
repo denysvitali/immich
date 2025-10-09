@@ -2,10 +2,12 @@ import 'package:drift/drift.dart';
 import 'package:immich_mobile/domain/models/person.model.dart';
 import 'package:immich_mobile/infrastructure/entities/person.entity.drift.dart';
 import 'package:immich_mobile/infrastructure/repositories/db.repository.dart';
+import 'package:logging/logging.dart';
 
 class DriftPeopleRepository extends DriftDatabaseRepository {
   final Drift _db;
-  const DriftPeopleRepository(this._db) : super(_db);
+  final Logger _log = Logger('DriftPeopleRepository');
+  DriftPeopleRepository(this._db) : super(_db);
 
   Future<List<DriftPerson>> getAssetPeople(String assetId) async {
     final query = _db.select(_db.assetFaceEntity).join([
@@ -19,6 +21,7 @@ class DriftPeopleRepository extends DriftDatabaseRepository {
   }
 
   Future<List<DriftPerson>> getAllPeople() async {
+    _log.info("Fetching all people from database...");
     final query =
         _db.select(_db.personEntity).join([
             leftOuterJoin(_db.assetFaceEntity, _db.assetFaceEntity.personId.equalsExp(_db.personEntity.id)),
@@ -30,10 +33,13 @@ class DriftPeopleRepository extends DriftDatabaseRepository {
             OrderingTerm(expression: _db.assetFaceEntity.id.count(), mode: OrderingMode.desc),
           ]);
 
-    return query.map((row) {
+    final results = await query.map((row) {
       final person = row.readTable(_db.personEntity);
       return person.toDto();
     }).get();
+
+    _log.info("Found ${results.length} people in database");
+    return results;
   }
 
   Future<int> updateName(String personId, String name) {

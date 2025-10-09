@@ -1,11 +1,14 @@
 import 'dart:async';
 import 'package:http/http.dart';
 import 'package:immich_mobile/services/http_client_config.service.dart';
+import 'package:logging/logging.dart';
 
 class _ImmichHttpClientSingleton {
   static _ImmichHttpClientSingleton? _instance;
   Client? _client;
   final HttpClientConfigService _configService = HttpClientConfigService();
+  final Logger _log = Logger('ImmichHttpClient');
+  bool _isInitializing = false;
 
   _ImmichHttpClientSingleton._();
 
@@ -16,7 +19,9 @@ class _ImmichHttpClientSingleton {
 
   Client getClient() {
     if (_client == null) {
-      throw "Client is not initialized!";
+      _log.severe('HTTP client is not initialized! This will cause image loading failures. '
+          'Make sure refreshClient() is called during app initialization.');
+      throw StateError("HTTP client is not initialized! Call refreshClient() first.");
     }
     return _client!;
   }
@@ -24,7 +29,28 @@ class _ImmichHttpClientSingleton {
   /// Refreshes the HTTP client with proper async handling to avoid main thread deadlocks
   /// Now uses the centralized configuration service for consistent mTLS setup
   Future<void> refreshClient() async {
-    _client = await _configService.refreshClient();
+    if (_isInitializing) {
+      _log.warning('HTTP client is already being initialized, skipping duplicate call');
+      return;
+    }
+
+    _isInitializing = true;
+    try {
+      _log.info('Starting HTTP client initialization...');
+
+      // Only refresh if client is null or explicitly needed
+      if (_client == null) {
+        _client = await _configService.refreshClient();
+        _log.info('HTTP client initialization completed successfully');
+      } else {
+        _log.info('HTTP client already initialized, skipping refresh');
+      }
+    } catch (e, stack) {
+      _log.severe('Failed to initialize HTTP client', e, stack);
+      rethrow;
+    } finally {
+      _isInitializing = false;
+    }
   }
 
   void dispose() {

@@ -68,7 +68,10 @@ class SearchService {
 
   Future<List<SearchExploreResponseDto>?> getExploreData() async {
     try {
-      return await _apiService.searchApi.getExploreData();
+      _log.info("Fetching explore data from API...");
+      final result = await _apiService.searchApi.getExploreData();
+      _log.info("Explore data fetched successfully: ${result?.length ?? 0} items");
+      return result;
     } catch (error, stackTrace) {
       _log.severe("Failed to getExploreData", error, stackTrace);
     }
@@ -77,7 +80,10 @@ class SearchService {
 
   Future<List<AssetResponseDto>?> getAllPlaces() async {
     try {
-      return await _apiService.searchApi.getAssetsByCity();
+      _log.info("Fetching all places from API...");
+      final result = await _apiService.searchApi.getAssetsByCity();
+      _log.info("Places fetched successfully: ${result?.length ?? 0} items");
+      return result;
     } catch (error, stackTrace) {
       _log.severe("Failed to getAllPlaces", error, stackTrace);
     }

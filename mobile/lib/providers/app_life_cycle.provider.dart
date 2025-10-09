@@ -16,6 +16,8 @@ import 'package:immich_mobile/providers/backup/ios_background_settings.provider.
 import 'package:immich_mobile/providers/backup/manual_upload.provider.dart';
 import 'package:immich_mobile/providers/gallery_permission.provider.dart';
 import 'package:immich_mobile/providers/infrastructure/platform.provider.dart';
+import 'package:immich_mobile/providers/infrastructure/db.provider.dart';
+import 'package:drift/drift.dart';
 import 'package:immich_mobile/providers/memory.provider.dart';
 import 'package:immich_mobile/providers/notification_permission.provider.dart';
 import 'package:immich_mobile/providers/server_info.provider.dart';
@@ -74,8 +76,9 @@ class AppLifeCycleNotifier extends StateNotifier<AppLifeCycleEnum> {
   }
 
   Future<void> _performResume() async {
-    // no need to resume because app was never really paused
-    if (!_wasPaused) return;
+    // no need to resume because app was never really paused (except for beta timeline which should refresh)
+    final isBeta = Store.isBetaTimelineEnabled;
+    if (!_wasPaused && !isBeta) return;
     _wasPaused = false;
 
     final isAuthenticated = _ref.read(authProvider).isAuthenticated;
@@ -147,6 +150,21 @@ class AppLifeCycleNotifier extends StateNotifier<AppLifeCycleEnum> {
 
     final backgroundManager = _ref.read(backgroundSyncProvider);
     final isAlbumLinkedSyncEnable = _ref.read(appSettingsServiceProvider).getSetting(AppSettingsEnum.syncAlbums);
+
+    // If the local database has no remote assets yet, force a full reset backfill on next sync
+    try {
+      final drift = _ref.read(driftProvider);
+      final countExp = drift.remoteAssetEntity.id.count();
+      final remoteCount = await (drift.selectOnly(
+        drift.remoteAssetEntity,
+      )..addColumns([countExp])).map((row) => row.read(countExp)!).getSingle();
+      if (remoteCount == 0) {
+        await Store.put(StoreKey.shouldResetSync, true);
+        _log.info("No remote assets found locally - requesting sync reset for full backfill");
+      }
+    } catch (e, stack) {
+      _log.warning("Failed to check remote asset count before sync", e, stack);
+    }
 
     _log.info("=== APP LIFECYCLE: Starting sync operations ===");
     try {

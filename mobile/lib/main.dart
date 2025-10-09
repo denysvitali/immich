@@ -56,7 +56,11 @@ void main() async {
     await Bootstrap.initDomain(isar, drift, logDb);
     await initApp();
     await setPackageInfo();
+
+    // Initialize HTTP client for mTLS and image loading
+    debugPrint('Initializing HTTP client...');
     await refreshClient();
+    debugPrint('HTTP client initialization complete');
 
     // Warm-up isolate pool for worker manager
     await workerManager.init(dynamicSpawning: true);

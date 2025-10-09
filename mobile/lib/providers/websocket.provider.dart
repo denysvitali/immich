@@ -109,7 +109,6 @@ class OkHttpWebSocketAdapter implements WebSocket {
     );
   }
 
-  @override
   Stream<dynamic> get stream => _controller.stream;
 
   @override
@@ -159,7 +158,6 @@ class OkHttpWebSocketAdapter implements WebSocket {
   @override
   int get readyState => _isClosed ? 3 : 1; // 1 = OPEN, 3 = CLOSED
 
-  @override
   String get url => ''; // OkHttpWebSocket doesn't expose this directly
 
   // Implement all required WebSocket methods
@@ -171,7 +169,7 @@ class OkHttpWebSocketAdapter implements WebSocket {
   }
 
   @override
-  Future<void> get done => _controller.done;
+  Future get done => _controller.done;
 
   @override
   Duration? get pingInterval => null;
@@ -186,7 +184,10 @@ class OkHttpWebSocketAdapter implements WebSocket {
   Future<bool> any(bool Function(dynamic element) test) => stream.any(test);
 
   @override
-  Stream<dynamic> asBroadcastStream({void Function(StreamSubscription<dynamic> subscription)? onListen, void Function(StreamSubscription<dynamic> subscription)? onCancel}) => stream.asBroadcastStream(onListen: onListen, onCancel: onCancel);
+  Stream<dynamic> asBroadcastStream({
+    void Function(StreamSubscription<dynamic> subscription)? onListen,
+    void Function(StreamSubscription<dynamic> subscription)? onCancel,
+  }) => stream.asBroadcastStream(onListen: onListen, onCancel: onCancel);
 
   @override
   Stream<S> asyncExpand<S>(Stream<S>? Function(dynamic event) convert) => stream.asyncExpand(convert);
@@ -213,10 +214,12 @@ class OkHttpWebSocketAdapter implements WebSocket {
   Future<bool> every(bool Function(dynamic element) test) => stream.every(test);
 
   @override
-  Future<dynamic> firstWhere(bool Function(dynamic element) test, {dynamic Function()? orElse}) => stream.firstWhere(test, orElse: orElse);
+  Future<dynamic> firstWhere(bool Function(dynamic element) test, {dynamic Function()? orElse}) =>
+      stream.firstWhere(test, orElse: orElse);
 
   @override
-  Future<S> fold<S>(S initialValue, S Function(S previous, dynamic element) combine) => stream.fold(initialValue, combine);
+  Future<S> fold<S>(S initialValue, S Function(S previous, dynamic element) combine) =>
+      stream.fold(initialValue, combine);
 
   @override
   Future<void> forEach(void Function(dynamic element) action) => stream.forEach(action);
@@ -234,7 +237,12 @@ class OkHttpWebSocketAdapter implements WebSocket {
   Future<int> get length => stream.length;
 
   @override
-  StreamSubscription<dynamic> listen(void Function(dynamic event)? onData, {Function? onError, void Function()? onDone, bool? cancelOnError}) => stream.listen(onData, onError: onError, onDone: onDone, cancelOnError: cancelOnError);
+  StreamSubscription<dynamic> listen(
+    void Function(dynamic event)? onData, {
+    Function? onError,
+    void Function()? onDone,
+    bool? cancelOnError,
+  }) => stream.listen(onData, onError: onError, onDone: onDone, cancelOnError: cancelOnError);
 
   @override
   Stream<S> map<S>(S Function(dynamic event) convert) => stream.map(convert);
@@ -249,7 +257,8 @@ class OkHttpWebSocketAdapter implements WebSocket {
   Future<dynamic> get single => stream.single;
 
   @override
-  Future<dynamic> singleWhere(bool Function(dynamic element) test, {dynamic Function()? orElse}) => stream.singleWhere(test, orElse: orElse);
+  Future<dynamic> singleWhere(bool Function(dynamic element) test, {dynamic Function()? orElse}) =>
+      stream.singleWhere(test, orElse: orElse);
 
   @override
   Stream<dynamic> skip(int count) => stream.skip(count);
@@ -264,7 +273,8 @@ class OkHttpWebSocketAdapter implements WebSocket {
   Stream<dynamic> takeWhile(bool Function(dynamic element) test) => stream.takeWhile(test);
 
   @override
-  Stream<dynamic> timeout(Duration timeLimit, {void Function(EventSink<dynamic> sink)? onTimeout}) => stream.timeout(timeLimit, onTimeout: onTimeout);
+  Stream<dynamic> timeout(Duration timeLimit, {void Function(EventSink<dynamic> sink)? onTimeout}) =>
+      stream.timeout(timeLimit, onTimeout: onTimeout);
 
   @override
   Future<List<dynamic>> toList() => stream.toList();
@@ -283,13 +293,15 @@ class OkHttpWebSocketAdapter implements WebSocket {
   Stream<S> expand<S>(Iterable<S> Function(dynamic element) convert) => stream.expand(convert);
 
   @override
-  Stream<dynamic> handleError(Function onError, {bool Function(dynamic error)? test}) => stream.handleError(onError, test: test);
+  Stream<dynamic> handleError(Function onError, {bool Function(dynamic error)? test}) =>
+      stream.handleError(onError, test: test);
 
   @override
   Future<String> join([String separator = ""]) => stream.join(separator);
 
   @override
-  Future<dynamic> lastWhere(bool Function(dynamic element) test, {dynamic Function()? orElse}) => stream.lastWhere(test, orElse: orElse);
+  Future<dynamic> lastWhere(bool Function(dynamic element) test, {dynamic Function()? orElse}) =>
+      stream.lastWhere(test, orElse: orElse);
 
   // Implement EventSink methods
   @override
@@ -301,37 +313,46 @@ class OkHttpWebSocketAdapter implements WebSocket {
 class ImmichHttpClientAdapter implements HttpClientAdapter {
   Client httpClient = immichHttpClient();
   final _log = Logger('ImmichHttpClientAdapter');
+  final _configService = HttpClientConfigService();
 
   @override
   Future<dynamic> connect(String uri, {Map<String, dynamic>? headers}) async {
+    // On Android, try OkHttp first for better mTLS support
     if (Platform.isAndroid) {
-      // For Android, we need to create a new OkHttpClient with the same configuration
-      // as the one used in the HTTP client config service
-      final configService = HttpClientConfigService();
-      final configuredClient = await configService.getConfiguredClient();
+      try {
+        _log.info('Attempting OkHttpWebSocket connection with mTLS configuration');
+        // Get the configured client with mTLS settings
+        final httpClient = await _configService.getConfiguredClient();
 
-      // Extract the OkHttpClient from the configured client
-      if (configuredClient is OkHttpClient) {
-        try {
-          // Create OkHttpWebSocket with mTLS configuration
-          final okHttpWebSocket = await OkHttpWebSocket.connect(Uri.parse(uri), client: configuredClient);
-          _log.info('Created OkHttpWebSocket with mTLS configuration');
-          // Wrap OkHttpWebSocket to make it compatible with socket.io client
-          return OkHttpWebSocketAdapter(okHttpWebSocket);
-        } catch (e) {
-          _log.warning('Failed to create OkHttpWebSocket: $e, falling back to standard WebSocket');
-          return WebSocket.connect(uri);
+        // Check if it's actually an OkHttpClient
+        if (httpClient is OkHttpClient) {
+          _log.info('Using OkHttpClient with mTLS configuration');
+
+          // Create OkHttp WebSocket with the configured client
+          final ok = await OkHttpWebSocket.connect(
+            Uri.parse(uri),
+            client: httpClient,
+          );
+
+          _log.info('OkHttpWebSocket successfully connected with mTLS configuration');
+          return OkHttpWebSocketAdapter(ok);
+        } else {
+          _log.warning('Configured client is not OkHttpClient, type: ${httpClient.runtimeType}');
         }
-      } else {
-        // Fallback to standard WebSocket if not OkHttpClient
-        _log.warning('Expected OkHttpClient but got ${configuredClient.runtimeType}, falling back to standard WebSocket. mTLS may not work properly.');
-        return WebSocket.connect(uri);
+      } catch (e, stack) {
+        _log.severe('OkHttpWebSocket connection failed: $e', e, stack);
+        // Fall through to try standard WebSocket
       }
-    } else {
-      // For iOS and other platforms, use the standard WebSocket
-      // The HTTP client configuration (including mTLS) is handled by the socket.io library
-      // through the HttpClientAdapter interface
-      return WebSocket.connect(uri);
+    }
+
+    // Fallback to standard WebSocket (or primary method for non-Android)
+    final mappedHeaders = headers?.map((k, v) => MapEntry(k, v.toString()));
+    try {
+      _log.info('Attempting standard WebSocket connection');
+      return await WebSocket.connect(uri, headers: mappedHeaders);
+    } catch (e, stack) {
+      _log.severe('Standard WebSocket.connect failed: $e', e, stack);
+      rethrow;
     }
   }
 }
@@ -367,7 +388,8 @@ class WebsocketNotifier extends StateNotifier<WebsocketState> {
         if (endpoint.userInfo.isNotEmpty) {
           headers["Authorization"] = "Basic ${base64.encode(utf8.encode(endpoint.userInfo))}";
         }
-
+        // Provide token via multiple channels: headers, auth, and query
+        final wsAuth = {'token': headers['x-immich-user-token'] ?? ''};
         dPrint(() => "Attempting to connect to websocket");
         // Configure socket transports must be specified
         Socket socket = io(
@@ -375,6 +397,8 @@ class WebsocketNotifier extends StateNotifier<WebsocketState> {
           OptionBuilder()
               .setPath("${endpoint.path}/socket.io")
               .setTransports(['websocket'])
+              .setAuth(wsAuth)
+              .setQuery(wsAuth)
               .setHttpClientAdapter(ImmichHttpClientAdapter())
               .enableReconnection()
               .enableForceNew()
